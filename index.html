@@ -1,0 +1,2064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChickenLand</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: monospace;
+    overflow: hidden;
+  }
+  #gameContainer {
+    position: relative;
+    image-rendering: pixelated;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    border: 4px solid #5a3a1a;
+    border-radius: 4px;
+  }
+  #startScreen, #winScreen, #deathScreen {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: rgba(0,0,0,0.8);
+    color: #fff;
+    z-index: 10;
+  }
+  #startScreen h1, #winScreen h1, #deathScreen h1 {
+    font-size: 48px;
+    color: #f5c542;
+    text-shadow: 3px 3px #8b4513;
+    margin-bottom: 10px;
+  }
+  #startScreen p, #winScreen p, #deathScreen p {
+    font-size: 16px;
+    color: #ccc;
+    margin-bottom: 20px;
+    text-align: center;
+    max-width: 400px;
+    line-height: 1.6;
+  }
+  .btn {
+    padding: 12px 32px;
+    font-size: 20px;
+    font-family: monospace;
+    background: #4a8c3f;
+    color: #fff;
+    border: 3px solid #2d5a27;
+    cursor: pointer;
+    image-rendering: pixelated;
+    margin-top: 10px;
+  }
+  .btn:hover { background: #5aad4f; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <canvas id="game" width="800" height="480"></canvas>
+
+  <div id="startScreen">
+    <h1>ChickenLand</h1>
+    <p>You're a chicken who escaped the pen!<br>
+    Dodge wolves, pits, and thorns to find your way home.<br>
+    Eat bugs to restore health!<br>
+    Find the Super Egg for invincibility!</p>
+    <p>A / Left = move left | D / Right = move right<br>
+    W / Up = move forward | S / Down = move back<br>
+    Space = jump</p>
+    <button class="btn" onclick="startGame()">Start Game</button>
+  </div>
+
+  <div id="winScreen" class="hidden">
+    <h1>You Made It Home!</h1>
+    <p>The chicken is safe in the pen.<br>Well done, brave chicken!</p>
+    <button class="btn" onclick="startGame()">Play Again</button>
+  </div>
+
+  <div id="deathScreen" class="hidden">
+    <h1>Oh No!</h1>
+    <p>The chicken didn't make it...</p>
+    <button class="btn" onclick="startGame()">Try Again</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+const TILE = 32;
+const ROWS = H / TILE;  // 15
+const GRAVITY = 0.55;
+const JUMP_FORCE = -10;
+const SUPER_EGG_DURATION = 300; // 5 seconds at 60fps
+
+// Colors - Stardew Valley palette
+const C = {
+  sky: '#87CEEB',
+  skyTop: '#5ba3d9',
+  grass: '#4a8c3f',
+  grassLight: '#5aad4f',
+  dirt: '#8b6914',
+  dirtDark: '#6b4f10',
+  wood: '#9b7530',
+  woodDark: '#6b4f10',
+  chickenBody: '#f5f0e0',
+  chickenWing: '#e8dcc0',
+  chickenComb: '#e03030',
+  chickenBeak: '#f5a623',
+  chickenEye: '#222',
+  chickenFeet: '#f5a623',
+  wolfBody: '#555',
+  wolfDark: '#333',
+  wolfEye: '#e03030',
+  wolfTeeth: '#fff',
+  thorn: '#2d5a27',
+  thornTip: '#5a3a1a',
+  bug: '#3a2a1a',
+  bugWing: '#aaddff',
+  pen: '#c4a55a',
+  penDark: '#8b7530',
+  heart: '#e03030',
+  heartEmpty: '#555',
+  cloud: '#fff',
+  cloudShadow: '#d0e8f0',
+  sun: '#f5e642',
+  sunGlow: '#f5c542',
+  eggShell: '#f5f0d0',
+  eggGlow: '#f5c542',
+  eggSparkle: '#ffe87a',
+  // Fall theme
+  fallGrass: '#c4823a',
+  fallGrassLight: '#d4994a',
+  fallDirt: '#6b4020',
+  fallDirtDark: '#4a2a10',
+  fallThorn: '#8b4513',
+  fallThornTip: '#6b3010',
+  fallLeaf1: '#cc3322',
+  fallLeaf2: '#e8a020',
+  // Winter theme
+  snow: '#e8e8f0',
+  snowLight: '#f5f5ff',
+  ice: '#aaccee',
+  iceDark: '#88aacc',
+  winterDirt: '#8899aa',
+  winterDirtDark: '#667788',
+  winterThorn: '#556666',
+  winterThornTip: '#889999',
+  icicle: '#ccddff',
+};
+
+// --- SOUND EFFECTS (Web Audio API) ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playSound(type) {
+  const now = audioCtx.currentTime;
+  const gain = audioCtx.createGain();
+  gain.connect(audioCtx.destination);
+
+  if (type === 'jump') {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(300, now);
+    osc.frequency.linearRampToValueAtTime(600, now + 0.1);
+    gain.gain.setValueAtTime(0.15, now);
+    gain.gain.linearRampToValueAtTime(0, now + 0.15);
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.15);
+  }
+  else if (type === 'hurt') {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(200, now);
+    osc.frequency.linearRampToValueAtTime(80, now + 0.25);
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.linearRampToValueAtTime(0, now + 0.3);
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  }
+  else if (type === 'die') {
+    // "Wah wah wah waaah" - descending notes with vibrato
+    const wahNotes = [
+      { freq: 392, time: 0, dur: 0.28 },     // G4 - wah
+      { freq: 370, time: 0.32, dur: 0.28 },   // F#4 - wah
+      { freq: 349, time: 0.64, dur: 0.28 },   // F4 - wah
+      { freq: 330, time: 0.96, dur: 0.7 },    // E4 - waaah (long, sad)
+    ];
+    wahNotes.forEach((n, i) => {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(n.freq, now + n.time);
+      // Add wobble/vibrato on the last long note
+      if (i === 3) {
+        osc.frequency.linearRampToValueAtTime(n.freq - 20, now + n.time + n.dur);
+        // Vibrato LFO
+        const lfo = audioCtx.createOscillator();
+        const lfoGain = audioCtx.createGain();
+        lfo.frequency.setValueAtTime(6, now + n.time);
+        lfoGain.gain.setValueAtTime(8, now + n.time);
+        lfo.connect(lfoGain);
+        lfoGain.connect(osc.frequency);
+        lfo.start(now + n.time);
+        lfo.stop(now + n.time + n.dur);
+      }
+      g.gain.setValueAtTime(0.18, now + n.time);
+      g.gain.setValueAtTime(0.16, now + n.time + n.dur * 0.7);
+      g.gain.linearRampToValueAtTime(0, now + n.time + n.dur);
+      osc.connect(g);
+      g.connect(audioCtx.destination);
+      osc.start(now + n.time);
+      osc.stop(now + n.time + n.dur + 0.01);
+    });
+  }
+  else if (type === 'eat') {
+    const osc1 = audioCtx.createOscillator();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(500, now);
+    osc1.frequency.setValueAtTime(700, now + 0.05);
+    osc1.frequency.setValueAtTime(900, now + 0.1);
+    gain.gain.setValueAtTime(0.15, now);
+    gain.gain.linearRampToValueAtTime(0, now + 0.2);
+    osc1.connect(gain);
+    osc1.start(now);
+    osc1.stop(now + 0.2);
+  }
+  else if (type === 'superEgg') {
+    // Power-up sound - dramatic ascending with shimmer
+    const melody = [
+      [400, 0, 0.1], [500, 0.08, 0.1], [600, 0.16, 0.1],
+      [800, 0.24, 0.15], [1000, 0.35, 0.15], [1200, 0.45, 0.3],
+    ];
+    melody.forEach(([freq, t, dur]) => {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + t);
+      g.gain.setValueAtTime(0.15, now + t);
+      g.gain.linearRampToValueAtTime(0, now + t + dur);
+      osc.connect(g);
+      g.connect(audioCtx.destination);
+      osc.start(now + t);
+      osc.stop(now + t + dur);
+    });
+  }
+  else if (type === 'wolfDestroy') {
+    // Satisfying crunch/pop
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(300, now);
+    osc.frequency.linearRampToValueAtTime(100, now + 0.15);
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.linearRampToValueAtTime(0, now + 0.2);
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.2);
+    // Pop on top
+    const osc2 = audioCtx.createOscillator();
+    const g2 = audioCtx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(800, now + 0.05);
+    g2.gain.setValueAtTime(0.12, now + 0.05);
+    g2.gain.linearRampToValueAtTime(0, now + 0.15);
+    osc2.connect(g2);
+    g2.connect(audioCtx.destination);
+    osc2.start(now + 0.05);
+    osc2.stop(now + 0.15);
+  }
+  else if (type === 'levelComplete') {
+    // Victory jingle - da da da-da-da daaaa!
+    const jingle = [
+      { freq: 523, time: 0, dur: 0.12 },      // C5
+      { freq: 523, time: 0.14, dur: 0.12 },    // C5
+      { freq: 523, time: 0.28, dur: 0.10 },    // C5
+      { freq: 659, time: 0.40, dur: 0.10 },    // E5
+      { freq: 784, time: 0.52, dur: 0.14 },    // G5
+      { freq: 1047, time: 0.70, dur: 0.50 },   // C6 (hold!)
+    ];
+    jingle.forEach((n) => {
+      // Lead
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(n.freq, now + n.time);
+      g.gain.setValueAtTime(0.14, now + n.time);
+      g.gain.setValueAtTime(0.12, now + n.time + n.dur * 0.6);
+      g.gain.linearRampToValueAtTime(0, now + n.time + n.dur);
+      osc.connect(g);
+      g.connect(audioCtx.destination);
+      osc.start(now + n.time);
+      osc.stop(now + n.time + n.dur + 0.01);
+      // Harmony (fifth above, quieter)
+      const osc2 = audioCtx.createOscillator();
+      const g2 = audioCtx.createGain();
+      osc2.type = 'square';
+      osc2.frequency.setValueAtTime(n.freq * 1.5, now + n.time);
+      g2.gain.setValueAtTime(0.05, now + n.time);
+      g2.gain.linearRampToValueAtTime(0, now + n.time + n.dur);
+      osc2.connect(g2);
+      g2.connect(audioCtx.destination);
+      osc2.start(now + n.time);
+      osc2.stop(now + n.time + n.dur + 0.01);
+    });
+    // Bass note underneath
+    const bassOsc = audioCtx.createOscillator();
+    const bassG = audioCtx.createGain();
+    bassOsc.type = 'triangle';
+    bassOsc.frequency.setValueAtTime(131, now); // C3
+    bassG.gain.setValueAtTime(0.15, now);
+    bassG.gain.linearRampToValueAtTime(0, now + 1.2);
+    bassOsc.connect(bassG);
+    bassG.connect(audioCtx.destination);
+    bassOsc.start(now);
+    bassOsc.stop(now + 1.3);
+  }
+  else if (type === 'win') {
+    const melody = [
+      [523, 0, 0.15], [587, 0.15, 0.15], [659, 0.3, 0.15],
+      [784, 0.5, 0.2], [659, 0.75, 0.1], [784, 0.9, 0.5],
+    ];
+    melody.forEach(([freq, t, dur]) => {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, now + t);
+      g.gain.setValueAtTime(0.12, now + t);
+      g.gain.linearRampToValueAtTime(0, now + t + dur);
+      osc.connect(g);
+      g.connect(audioCtx.destination);
+      osc.start(now + t);
+      osc.stop(now + t + dur);
+    });
+  }
+  else if (type === 'walk') {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(120 + Math.random() * 40, now);
+    gain.gain.setValueAtTime(0.06, now);
+    gain.gain.linearRampToValueAtTime(0, now + 0.06);
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.06);
+  }
+}
+
+document.addEventListener('click', () => { if (audioCtx.state === 'suspended') audioCtx.resume(); });
+document.addEventListener('keydown', () => { if (audioCtx.state === 'suspended') audioCtx.resume(); }, { once: true });
+
+// --- 8-BIT MUSIC ENGINE ---
+const music = {
+  playing: false,
+  baseBpm: 110,
+  bpm: 110,
+  step: 0,
+  nextNoteTime: 0,
+  songIdx: 0,
+};
+
+// Note frequency helper
+const NOTE = (name) => {
+  const notes = {
+    'C3':131,'Db3':139,'D3':147,'Eb3':156,'E3':165,'F3':175,'Gb3':185,'G3':196,'Ab3':208,'A3':220,'Bb3':233,'B3':247,
+    'C4':262,'Db4':277,'D4':294,'Eb4':311,'E4':330,'F4':349,'Gb4':370,'G4':392,'Ab4':415,'A4':440,'Bb4':466,'B4':494,
+    'C5':523,'Db5':554,'D5':587,'Eb5':622,'E5':659,'F5':698,'Gb5':740,'G5':784,'Ab5':831,'A5':880,'Bb5':932,'B5':988,
+    'C6':1047,'D6':1175,'E6':1319,'F6':1397,'G6':1568,
+    '_':0,
+  };
+  return notes[name] || 0;
+};
+
+// =============================================
+// SONG 1: "The Farmyard" - Light, cheerful, C major
+// =============================================
+const song1 = {
+  baseBpm: 110,
+  leadType: 'square', leadVol: 0.06,
+  bassType: 'triangle', bassVol: 0.10,
+  arpType: 'square', arpVol: 0.025, arpDetune: 10,
+  melody: {
+    V1: ['E5','_','D5','_','C5','_','D5','_','E5','_','G5','_','E5','_','D5','_'],
+    V2: ['C5','_','D5','_','E5','_','D5','C5','D5','_','C5','_','_','_','_','_'],
+    C1: ['G5','_','A5','G5','E5','_','G5','_','A5','_','B5','A5','G5','_','E5','_'],
+    C2: ['G5','A5','G5','_','E5','_','D5','E5','G5','_','A5','_','G5','_','_','_'],
+    B1: ['E5','_','Eb5','_','D5','_','C5','_','D5','_','Eb5','_','E5','_','G5','_'],
+    B2: ['A5','_','G5','_','E5','_','D5','_','E5','_','D5','_','C5','_','_','_'],
+  },
+  bass: {
+    V1: ['C3','_','C3','_','G3','_','G3','_','A3','_','A3','_','E3','_','E3','_'],
+    V2: ['F3','_','F3','_','G3','_','G3','_','C3','_','C3','_','C3','_','_','_'],
+    C1: ['C3','_','C3','_','E3','_','E3','_','F3','_','F3','_','G3','_','G3','_'],
+    C2: ['C3','_','E3','_','F3','_','G3','_','C3','_','E3','_','C3','_','_','_'],
+    B1: ['A3','_','A3','_','Ab3','_','Ab3','_','G3','_','G3','_','E3','_','E3','_'],
+    B2: ['F3','_','F3','_','G3','_','G3','_','C3','_','C3','_','C3','_','_','_'],
+  },
+  arp: {
+    V1: ['C4','E4','G4','C5','E4','G4','C5','E5','A3','C4','E4','A4','C4','E4','A4','C5'],
+    V2: ['F3','A3','C4','F4','A3','C4','F4','A4','C4','E4','G4','C5','E4','G4','C5','E5'],
+    C1: ['C4','E4','G4','C5','E4','G4','C5','E5','F4','A4','C5','F5','G4','B4','D5','G5'],
+    C2: ['C4','E4','G4','C5','F4','A4','C5','F5','C4','E4','G4','C5','C4','E4','G4','C5'],
+    B1: ['A3','C4','E4','A4','Ab3','C4','Eb4','Ab4','G3','B3','D4','G4','E3','G3','B3','E4'],
+    B2: ['F3','A3','C4','F4','G3','B3','D4','G4','C4','E4','G4','C5','C4','E4','G4','C5'],
+  },
+  arrangement: ['V1','V2','C1','C2','V1','V2','C1','C2','B1','B2','C1','C2'],
+};
+
+// =============================================
+// SONG 2: "Wolf Woods" - Dark, slow, creepy, minor key
+// =============================================
+const song2 = {
+  baseBpm: 75,
+  leadType: 'square', leadVol: 0.05,
+  bassType: 'triangle', bassVol: 0.12,
+  arpType: 'sawtooth', arpVol: 0.018, arpDetune: -5,
+  melody: {
+    // Verse - sparse, eerie, lots of rests
+    V1: ['E4','_','_','_','Eb4','_','_','D4','_','_','_','_','Db4','_','_','_'],
+    V2: ['C4','_','_','_','_','_','Eb4','_','D4','_','_','_','C4','_','_','_'],
+    // Chorus - more movement but still dark
+    C1: ['G4','_','Ab4','_','G4','_','Eb4','_','D4','_','_','C4','_','Eb4','_','_'],
+    C2: ['G4','_','_','Ab4','_','G4','_','Eb4','_','D4','_','_','C4','_','_','_'],
+    // Bridge - dissonant, building dread
+    B1: ['Bb4','_','_','Ab4','_','_','Gb4','_','_','_','Ab4','_','_','_','G4','_'],
+    B2: ['Ab4','_','Gb4','_','_','_','Eb4','_','_','D4','_','_','C4','_','_','_'],
+  },
+  bass: {
+    V1: ['C3','_','_','_','C3','_','_','_','Ab3','_','_','_','G3','_','_','_'],
+    V2: ['Eb3','_','_','_','Eb3','_','_','_','C3','_','_','_','C3','_','_','_'],
+    C1: ['C3','_','_','C3','_','_','Ab3','_','_','Ab3','_','_','G3','_','_','_'],
+    C2: ['Eb3','_','_','Eb3','_','_','D3','_','_','D3','_','_','C3','_','_','_'],
+    B1: ['Gb3','_','_','_','Gb3','_','_','_','Ab3','_','_','_','G3','_','_','_'],
+    B2: ['Ab3','_','_','_','Eb3','_','_','_','C3','_','_','_','C3','_','_','_'],
+  },
+  arp: {
+    // Slow, dark arpeggios
+    V1: ['C4','_','Eb4','_','G4','_','Eb4','_','Ab3','_','C4','_','Eb4','_','C4','_'],
+    V2: ['Eb4','_','G4','_','C5','_','G4','_','C4','_','Eb4','_','G4','_','Eb4','_'],
+    C1: ['C4','Eb4','G4','_','C4','Eb4','G4','_','Ab3','C4','Eb4','_','G3','B3','D4','_'],
+    C2: ['Eb4','G4','C5','_','Eb4','G4','Bb4','_','D4','Ab4','D4','_','C4','G4','C4','_'],
+    B1: ['Gb3','Bb3','Db4','_','Gb3','Bb3','Db4','_','Ab3','C4','Eb4','_','G3','B3','D4','_'],
+    B2: ['Ab3','C4','Eb4','_','Eb3','G3','Bb3','_','C4','Eb4','G4','_','C4','Eb4','G4','_'],
+  },
+  arrangement: ['V1','V2','C1','C2','V1','V2','C1','C2','B1','B2','C1','C2'],
+};
+
+// =============================================
+// SONG 3: "The Great Escape" - Epic, adventurous, driving
+// =============================================
+const song3 = {
+  baseBpm: 130,
+  leadType: 'square', leadVol: 0.07,
+  bassType: 'triangle', bassVol: 0.11,
+  arpType: 'square', arpVol: 0.03, arpDetune: 8,
+  hasDrums: true,
+  hasGuitar: true,
+  melody: {
+    V1: ['E5','_','E5','G5','A5','_','G5','_','E5','_','D5','E5','G5','_','_','_'],
+    V2: ['A5','_','G5','E5','D5','_','E5','_','G5','A5','B5','_','A5','_','_','_'],
+    C1: ['C6','_','B5','A5','G5','_','A5','B5','C6','_','D6','_','C6','_','B5','_'],
+    C2: ['A5','_','B5','C6','D6','_','C6','B5','A5','_','G5','_','A5','_','_','_'],
+    B1: ['E5','_','F5','_','G5','_','A5','_','Bb5','_','A5','_','G5','_','F5','_'],
+    B2: ['E5','_','D5','_','C5','_','D5','E5','F5','_','G5','_','A5','_','_','_'],
+  },
+  bass: {
+    V1: ['A3','_','A3','_','E3','_','E3','_','A3','_','A3','_','G3','_','G3','_'],
+    V2: ['F3','_','F3','_','G3','_','G3','_','A3','_','A3','_','E3','_','E3','_'],
+    C1: ['A3','_','A3','E3','F3','_','F3','_','G3','_','G3','_','A3','_','E3','_'],
+    C2: ['F3','_','G3','_','A3','_','A3','E3','F3','_','G3','_','A3','_','A3','_'],
+    B1: ['A3','_','A3','_','Bb3','_','Bb3','_','A3','_','A3','_','G3','_','G3','_'],
+    B2: ['F3','_','F3','_','E3','_','E3','_','F3','_','G3','_','A3','_','A3','_'],
+  },
+  arp: {
+    V1: ['A3','C4','E4','A4','C4','E4','A4','C5','G3','B3','D4','G4','B3','D4','G4','B4'],
+    V2: ['F3','A3','C4','F4','A3','C4','F4','A4','A3','C4','E4','A4','C4','E4','A4','C5'],
+    C1: ['A3','C4','E4','A4','E4','A4','C5','E5','F3','A3','C4','F4','G3','B3','D4','G4'],
+    C2: ['F3','A3','C4','F4','G3','B3','D4','G4','A3','C4','E4','A4','A3','C4','E4','A4'],
+    B1: ['A3','C4','E4','A4','Bb3','D4','F4','Bb4','A3','C4','E4','A4','G3','Bb3','D4','G4'],
+    B2: ['F3','A3','C4','F4','E3','G3','B3','E4','F3','A3','C4','F4','A3','C4','E4','A4'],
+  },
+  // Drums: K=kick, S=snare, H=hihat, _=rest
+  drums: {
+    V1: ['K','H','_','H','S','H','_','H','K','H','K','H','S','H','_','H'],
+    V2: ['K','H','_','H','S','H','_','H','K','H','K','H','S','H','_','H'],
+    C1: ['K','H','K','H','S','H','K','H','K','H','K','H','S','H','K','H'],
+    C2: ['K','H','K','H','S','H','K','H','K','K','K','H','S','S','K','H'],
+    B1: ['K','_','_','H','S','_','_','H','K','_','K','H','S','_','_','H'],
+    B2: ['K','H','K','H','S','H','K','H','K','H','K','K','S','S','S','S'],
+  },
+  // Power chords for guitar (root notes, played as distorted intervals)
+  guitar: {
+    V1: ['A3','_','_','_','_','_','E3','_','_','_','_','_','G3','_','_','_'],
+    V2: ['F3','_','_','_','_','_','G3','_','_','_','_','_','A3','_','_','_'],
+    C1: ['A3','_','A3','_','F3','_','_','_','G3','_','_','_','A3','_','E3','_'],
+    C2: ['F3','_','G3','_','A3','_','_','_','F3','_','G3','_','A3','_','_','_'],
+    B1: ['A3','_','_','_','Bb3','_','_','_','A3','_','_','_','G3','_','_','_'],
+    B2: ['F3','_','_','_','E3','_','_','_','F3','_','G3','_','A3','_','A3','_'],
+  },
+  arrangement: ['V1','V2','C1','C2','V1','V2','C1','C2','B1','B2','C1','C2'],
+};
+
+// =============================================
+// SONG 4: "Autumn Hollow" - Lo-fi hip-hop, chill, jazzy
+// =============================================
+const song4 = {
+  baseBpm: 80,
+  leadType: 'sine', leadVol: 0.05,
+  bassType: 'triangle', bassVol: 0.10,
+  arpType: 'sine', arpVol: 0.02, arpDetune: 5,
+  hasDrums: true,
+  hasLofi: true,
+  melody: {
+    // Verse - lazy, jazzy melody with 7ths
+    V1: ['E5','_','_','D5','_','_','C5','_','_','_','Bb4','_','A4','_','_','_'],
+    V2: ['C5','_','_','_','D5','_','_','Eb5','_','D5','_','_','C5','_','_','_'],
+    // Chorus - a little more movement, still laid back
+    C1: ['G5','_','_','F5','_','E5','_','_','D5','_','_','C5','_','D5','_','_'],
+    C2: ['E5','_','_','_','F5','_','E5','_','D5','_','_','_','C5','_','_','_'],
+    // Bridge - minor 7th feel, contemplative
+    B1: ['A4','_','_','Bb4','_','_','C5','_','_','_','D5','_','_','Eb5','_','_'],
+    B2: ['D5','_','_','C5','_','_','Bb4','_','_','_','A4','_','_','_','_','_'],
+  },
+  bass: {
+    V1: ['C3','_','_','_','C3','_','_','_','Bb3','_','_','_','A3','_','_','_'],
+    V2: ['F3','_','_','_','G3','_','_','_','C3','_','_','_','C3','_','_','_'],
+    C1: ['C3','_','_','C3','_','_','F3','_','_','F3','_','_','G3','_','_','_'],
+    C2: ['Ab3','_','_','_','G3','_','_','_','F3','_','_','_','C3','_','_','_'],
+    B1: ['F3','_','_','_','Gb3','_','_','_','Ab3','_','_','_','Bb3','_','_','_'],
+    B2: ['Ab3','_','_','_','G3','_','_','_','F3','_','_','_','C3','_','_','_'],
+  },
+  arp: {
+    V1: ['C4','_','Eb4','_','G4','_','Bb4','_','C4','_','Eb4','_','G4','_','Bb4','_'],
+    V2: ['F3','_','Ab3','_','C4','_','Eb4','_','C4','_','Eb4','_','G4','_','Bb4','_'],
+    C1: ['C4','Eb4','G4','_','Bb4','_','C4','Eb4','F3','Ab3','C4','_','Eb4','_','G4','_'],
+    C2: ['Ab3','C4','Eb4','_','Ab4','_','G3','Bb3','D4','_','G4','_','C4','Eb4','G4','_'],
+    B1: ['F3','_','Ab3','_','C4','_','F4','_','Ab3','_','C4','_','Eb4','_','Ab4','_'],
+    B2: ['Ab3','_','C4','_','Eb4','_','Ab4','_','C4','_','Eb4','_','G4','_','C5','_'],
+  },
+  // Lo-fi drums: muffled kick and snare with vinyl crackle feel
+  drums: {
+    V1: ['K','_','_','H','S','_','_','H','K','_','K','H','S','_','_','H'],
+    V2: ['K','_','_','H','S','_','_','H','K','_','_','H','S','_','H','_'],
+    C1: ['K','_','H','H','S','_','_','H','K','_','H','H','S','_','_','H'],
+    C2: ['K','_','H','H','S','_','_','H','K','_','K','H','S','_','H','_'],
+    B1: ['K','_','_','_','S','_','_','_','K','_','_','_','S','_','_','_'],
+    B2: ['K','_','_','H','S','_','_','H','K','_','K','H','S','S','_','H'],
+  },
+  // Lo-fi chord changes (root notes for playLofiChord)
+  lofiChords: {
+    V1: ['C4','_','_','_','_','_','_','_','Bb3','_','_','_','_','_','_','_'],
+    V2: ['F3','_','_','_','_','_','_','_','C4','_','_','_','_','_','_','_'],
+    C1: ['C4','_','_','_','_','_','_','_','F3','_','_','_','G3','_','_','_'],
+    C2: ['Ab3','_','_','_','_','_','_','_','C4','_','_','_','_','_','_','_'],
+    B1: ['F3','_','_','_','_','_','_','_','Ab3','_','_','_','_','_','_','_'],
+    B2: ['Ab3','_','_','_','G3','_','_','_','C4','_','_','_','_','_','_','_'],
+  },
+  arrangement: ['V1','V2','C1','C2','V1','V2','C1','C2','B1','B2','C1','C2'],
+};
+
+// =============================================
+// SONG 5: "Frozen Peak" - Dubstep, heavy drops, wobble bass
+// =============================================
+const song5 = {
+  baseBpm: 140,
+  leadType: 'square', leadVol: 0.06,
+  bassType: 'triangle', bassVol: 0.08,
+  arpType: 'square', arpVol: 0.02, arpDetune: 12,
+  hasDrums: true,
+  hasWobble: true,
+  melody: {
+    // Verse - eerie, minimal, building tension
+    V1: ['E5','_','_','_','_','_','Eb5','_','_','_','_','_','D5','_','_','_'],
+    V2: ['_','_','G5','_','_','_','_','_','F5','_','_','_','E5','_','_','_'],
+    // Chorus - DROP! aggressive, high energy
+    C1: ['E5','E5','_','G5','E5','_','B5','_','E5','E5','_','G5','A5','_','G5','_'],
+    C2: ['B5','_','A5','G5','E5','_','_','G5','A5','_','B5','_','A5','G5','E5','_'],
+    // Bridge - breakdown, half-time feel
+    B1: ['E5','_','_','_','_','_','_','_','Eb5','_','_','_','_','_','_','_'],
+    B2: ['D5','_','_','_','_','_','_','_','E5','_','_','_','_','_','_','_'],
+  },
+  bass: {
+    V1: ['E3','_','_','_','E3','_','_','_','D3','_','_','_','D3','_','_','_'],
+    V2: ['C3','_','_','_','C3','_','_','_','B3','_','_','_','E3','_','_','_'],
+    C1: ['E3','_','E3','_','G3','_','_','_','E3','_','E3','_','A3','_','_','_'],
+    C2: ['B3','_','_','_','G3','_','_','_','A3','_','_','_','E3','_','_','_'],
+    B1: ['E3','_','_','_','_','_','_','_','Eb3','_','_','_','_','_','_','_'],
+    B2: ['D3','_','_','_','_','_','_','_','E3','_','_','_','_','_','E3','_'],
+  },
+  arp: {
+    V1: ['E4','_','B4','_','E5','_','B4','_','D4','_','A4','_','D5','_','A4','_'],
+    V2: ['C4','_','G4','_','C5','_','G4','_','B3','_','E4','_','B4','_','E4','_'],
+    C1: ['E4','G4','B4','E5','G4','B4','E5','G5','E4','G4','B4','E5','A4','B4','E5','A5'],
+    C2: ['B4','E5','G5','B5','A4','E5','A5','E5','G4','B4','E5','G5','E4','G4','B4','E5'],
+    B1: ['E4','_','_','B4','_','_','E5','_','Eb4','_','_','Bb4','_','_','Eb5','_'],
+    B2: ['D4','_','_','A4','_','_','D5','_','E4','_','_','B4','_','_','E5','_'],
+  },
+  // Dubstep drums - half-time in verse, full power in chorus
+  drums: {
+    V1: ['K','_','_','_','S','_','_','_','K','_','_','_','S','_','_','_'],
+    V2: ['K','_','_','_','S','_','_','_','K','_','K','_','S','_','_','_'],
+    C1: ['K','_','K','H','S','_','K','H','K','_','K','H','S','H','K','H'],
+    C2: ['K','H','K','H','S','H','K','H','K','K','K','H','S','S','S','S'],
+    B1: ['K','_','_','_','_','_','_','_','S','_','_','_','_','_','_','_'],
+    B2: ['K','_','_','_','_','_','_','_','S','_','_','_','K','_','S','S'],
+  },
+  // Wobble bass patterns (root notes for playWobble, chorus only)
+  wobble: {
+    V1: ['_','_','_','_','_','_','_','_','_','_','_','_','_','_','_','_'],
+    V2: ['_','_','_','_','_','_','_','_','_','_','_','_','E3','_','_','_'],
+    C1: ['E3','_','_','_','E3','_','_','_','G3','_','_','_','A3','_','_','_'],
+    C2: ['B3','_','_','_','G3','_','_','_','A3','_','_','_','E3','_','_','_'],
+    B1: ['E3','_','_','_','_','_','_','_','_','_','_','_','_','_','_','_'],
+    B2: ['_','_','_','_','_','_','_','_','E3','_','_','_','_','_','_','_'],
+  },
+  arrangement: ['V1','V2','C1','C2','V1','V2','C1','C2','B1','B2','C1','C2'],
+};
+
+const songs = [song1, song2, song3, song4, song5];
+
+function playNote(freq, duration, type, volume, detune) {
+  if (freq === 0) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, now);
+  if (detune) osc.detune.setValueAtTime(detune, now);
+
+  gain.gain.setValueAtTime(volume, now);
+  gain.gain.setValueAtTime(volume * 0.8, now + duration * 0.6);
+  gain.gain.linearRampToValueAtTime(0, now + duration * 0.95);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + duration);
+}
+
+// --- DRUM SYNTHESIS ---
+function playDrum(type) {
+  const now = audioCtx.currentTime;
+
+  if (type === 'K') {
+    // Kick drum - sine wave pitch drop + noise thump
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.exponentialRampToValueAtTime(40, now + 0.12);
+    g.gain.setValueAtTime(0.18, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+    osc.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.15);
+  }
+  else if (type === 'S') {
+    // Snare - noise burst + tone
+    const bufSize = audioCtx.sampleRate * 0.08;
+    const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buf;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.12, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+    noise.connect(ng);
+    ng.connect(audioCtx.destination);
+    noise.start(now);
+    noise.stop(now + 0.08);
+    // Tonal body
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(200, now);
+    osc.frequency.exponentialRampToValueAtTime(120, now + 0.05);
+    g.gain.setValueAtTime(0.10, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    osc.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.06);
+  }
+  else if (type === 'H') {
+    // Hi-hat - filtered noise, very short
+    const bufSize = audioCtx.sampleRate * 0.04;
+    const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buf;
+    const hp = audioCtx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.setValueAtTime(7000, now);
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.06, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+    noise.connect(hp);
+    hp.connect(ng);
+    ng.connect(audioCtx.destination);
+    noise.start(now);
+    noise.stop(now + 0.04);
+  }
+}
+
+// --- DISTORTED GUITAR SYNTHESIS ---
+function playGuitar(freq, duration) {
+  if (freq === 0) return;
+  const now = audioCtx.currentTime;
+
+  // Power chord: root + fifth + octave, with distortion
+  const freqs = [freq, freq * 1.5, freq * 2];
+  freqs.forEach((f, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(f, now);
+    // Slight detune for thickness
+    osc.detune.setValueAtTime((i - 1) * 6, now);
+
+    // Waveshaper for distortion
+    const distortion = audioCtx.createWaveShaper();
+    const samples = 256;
+    const curve = new Float32Array(samples);
+    for (let j = 0; j < samples; j++) {
+      const x = (j * 2) / samples - 1;
+      curve[j] = (Math.PI + 3.5) * x / (Math.PI + 3.5 * Math.abs(x));
+    }
+    distortion.curve = curve;
+    distortion.oversample = '2x';
+
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(i === 0 ? 0.035 : 0.02, now);
+    g.gain.setValueAtTime(i === 0 ? 0.03 : 0.018, now + duration * 0.5);
+    g.gain.linearRampToValueAtTime(0, now + duration * 0.95);
+
+    // Low-pass to tame harsh highs
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2000, now);
+
+    osc.connect(distortion);
+    distortion.connect(lp);
+    lp.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + duration);
+  });
+}
+
+// --- WOBBLE BASS (for dubstep) ---
+function playWobble(freq, duration) {
+  if (freq === 0) return;
+  const now = audioCtx.currentTime;
+
+  // Two detuned sawtooth oscillators
+  [-6, 6].forEach(det => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(freq, now);
+    osc.detune.setValueAtTime(det, now);
+
+    // LFO-modulated low-pass filter for the wobble
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(300, now);
+    lp.Q.setValueAtTime(8, now);
+
+    const lfo = audioCtx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(4, now); // wobble rate
+    const lfoGain = audioCtx.createGain();
+    lfoGain.gain.setValueAtTime(600, now);
+    lfo.connect(lfoGain);
+    lfoGain.connect(lp.frequency);
+
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.07, now);
+    g.gain.setValueAtTime(0.06, now + duration * 0.6);
+    g.gain.linearRampToValueAtTime(0, now + duration * 0.95);
+
+    osc.connect(lp);
+    lp.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(now);
+    lfo.start(now);
+    osc.stop(now + duration);
+    lfo.stop(now + duration);
+  });
+}
+
+// --- LO-FI KEYS (warm, muffled chords) ---
+function playLofiChord(freq, duration) {
+  if (freq === 0) return;
+  const now = audioCtx.currentTime;
+
+  // Root + third + fifth, warm and muffled
+  const chord = [freq, freq * 1.25, freq * 1.5];
+  chord.forEach((f, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(f, now);
+    // Slight vinyl-style detune
+    osc.detune.setValueAtTime(Math.sin(now * 0.5 + i) * 8, now);
+
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(800, now);
+
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(i === 0 ? 0.04 : 0.025, now);
+    g.gain.linearRampToValueAtTime(i === 0 ? 0.035 : 0.02, now + duration * 0.5);
+    g.gain.linearRampToValueAtTime(0, now + duration * 0.95);
+
+    osc.connect(lp);
+    lp.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + duration);
+  });
+}
+
+function musicTick() {
+  if (!music.playing) return;
+
+  const now = audioCtx.currentTime;
+  if (now < music.nextNoteTime) {
+    requestAnimationFrame(musicTick);
+    return;
+  }
+
+  const song = songs[music.songIdx] || songs[0];
+  const stepDuration = 60 / music.bpm / 4;
+  const seq = song.arrangement;
+  const patternKey = seq[Math.floor(music.step / 16) % seq.length];
+  const stepInPattern = music.step % 16;
+
+  // Lead melody
+  const melodyNote = song.melody[patternKey][stepInPattern];
+  if (melodyNote !== '_') {
+    playNote(NOTE(melodyNote), stepDuration * 1.8, song.leadType, song.leadVol, 0);
+  }
+
+  // Bass
+  const bassNote = song.bass[patternKey][stepInPattern];
+  if (bassNote !== '_') {
+    playNote(NOTE(bassNote), stepDuration * 1.5, song.bassType, song.bassVol, 0);
+  }
+
+  // Arpeggio
+  const arpNote = song.arp[patternKey][stepInPattern];
+  if (arpNote !== '_') {
+    playNote(NOTE(arpNote), stepDuration * 0.6, song.arpType, song.arpVol, song.arpDetune);
+  }
+
+  // Drums (song 3)
+  if (song.hasDrums && song.drums[patternKey]) {
+    const drumHit = song.drums[patternKey][stepInPattern];
+    if (drumHit !== '_') playDrum(drumHit);
+  }
+
+  // Distorted guitar (song 3)
+  if (song.hasGuitar && song.guitar[patternKey]) {
+    const guitarNote = song.guitar[patternKey][stepInPattern];
+    if (guitarNote !== '_') {
+      playGuitar(NOTE(guitarNote), stepDuration * 3);
+    }
+  }
+
+  // Lo-fi chords (song 4)
+  if (song.hasLofi && song.lofiChords[patternKey]) {
+    const chordNote = song.lofiChords[patternKey][stepInPattern];
+    if (chordNote !== '_') {
+      playLofiChord(NOTE(chordNote), stepDuration * 6);
+    }
+  }
+
+  // Wobble bass (song 5)
+  if (song.hasWobble && song.wobble[patternKey]) {
+    const wobbleNote = song.wobble[patternKey][stepInPattern];
+    if (wobbleNote !== '_') {
+      playWobble(NOTE(wobbleNote), stepDuration * 4);
+    }
+  }
+
+  music.step++;
+  music.nextNoteTime = now + stepDuration;
+
+  requestAnimationFrame(musicTick);
+}
+
+function startMusic() {
+  music.songIdx = currentLevel;
+  const song = songs[music.songIdx] || songs[0];
+  music.baseBpm = song.baseBpm;
+  music.bpm = song.baseBpm;
+  music.playing = true;
+  music.step = 0;
+  music.nextNoteTime = audioCtx.currentTime;
+  musicTick();
+}
+
+function stopMusic() {
+  music.playing = false;
+}
+
+// --- LEVELS (wide, scrolling maps) ---
+// Each row is 75 tiles wide (75 * 32 = 2400px, 3x screen width)
+// Legend: 1=grass, 2=dirt, T=thorn, P=pen(goal), E=super egg marker (placed via entities)
+const levels = [
+  {
+    name: "The Farmyard",
+    cols: 75,
+    sky: { top: '#5ba3d9', bottom: '#87CEEB', sunColor: '#f5e642', sunGlow: '#f5c542', cloudColor: '#fff', cloudShadow: '#d0e8f0', starCount: 0 },
+    map: [
+      "                                                                           ",
+      "                                                                           ",
+      "                                                                           ",
+      "                                                                           ",
+      "                                                                           ",
+      "                                                                       P   ",
+      "          1111         111                  111        1111          111111  ",
+      "                                  11                         111            ",
+      "     111       11           111        11        111              111  11   ",
+      "   T       1       T             T         1          T       111   T      ",
+      "  111    1   111  111111     111    111  11   1111   111    1   11111111    ",
+      "       1                          1               1                    11  ",
+      " 111      T   111     11   111       T    111       11  T    111      1111 ",
+      "1111111 111111111  11111111111111 1111111111111  111111111111111111111111111",
+      "2222222 222222222  22222222222222 2222222222222  222222222222222222222222222",
+    ],
+    playerStart: { x: 1, y: 12 },
+    wolves: [
+      { x: 14, y: 12, patrol: 3 },
+      { x: 35, y: 12, patrol: 4 },
+      { x: 55, y: 12, patrol: 3 },
+    ],
+    bugs: [
+      { x: 5, y: 7 }, { x: 12, y: 5 }, { x: 18, y: 9 },
+      { x: 28, y: 6 }, { x: 40, y: 5 }, { x: 50, y: 8 },
+      { x: 60, y: 6 }, { x: 68, y: 4 },
+    ],
+    superEggs: [{ x: 30, y: 5 }],
+  },
+  {
+    name: "Wolf Woods",
+    cols: 75,
+    sky: { top: '#0a0a2a', bottom: '#1a1a4a', sunColor: '#e8e8d0', sunGlow: '#aaaacc', cloudColor: '#2a2a4a', cloudShadow: '#1a1a3a', starCount: 40 },
+    map: [
+      "                                                                           ",
+      "                                                                           ",
+      "                                                                           ",
+      "                                                                       P   ",
+      "                                                                     1111  ",
+      "              11111                      11                    11          ",
+      "         11         11       111              1111       111        111     ",
+      "                         11       11                          11           ",
+      "   111       11       1       111      111       11    111        111      ",
+      "      T    T      T       T       T         T       T        T        T    ",
+      "  11   1111  111  1111  11  1111  1111    111  1111   111  1111  111  1111  ",
+      "                                                                           ",
+      " 1   T    111   T   111   T   111    T  111  T    111   T   111   T   1111 ",
+      "1111111111111111111 111111111111111111111111111111111111111111111111111 1111 ",
+      "2222222222222222222 222222222222222222222222222222222222222222222222222 2222 ",
+    ],
+    playerStart: { x: 1, y: 12 },
+    wolves: [
+      { x: 8, y: 12, patrol: 4 },
+      { x: 18, y: 9, patrol: 2 },
+      { x: 30, y: 12, patrol: 5 },
+      { x: 42, y: 12, patrol: 3 },
+      { x: 55, y: 9, patrol: 3 },
+      { x: 65, y: 12, patrol: 4 },
+    ],
+    bugs: [
+      { x: 3, y: 7 }, { x: 10, y: 5 }, { x: 20, y: 5 }, { x: 15, y: 12 },
+      { x: 32, y: 7 }, { x: 45, y: 5 }, { x: 52, y: 8 }, { x: 62, y: 5 },
+      { x: 70, y: 3 },
+    ],
+    superEggs: [{ x: 22, y: 4 }, { x: 58, y: 5 }],
+  },
+  {
+    name: "The Great Escape",
+    cols: 100,
+    sky: { top: '#2a1a3a', bottom: '#e8603a', sunColor: '#f54a30', sunGlow: '#f58040', cloudColor: '#d4604a', cloudShadow: '#aa4030', starCount: 0 },
+    map: [
+      "                                                                                                    ",
+      "                                                                                                    ",
+      "                                                                                                P   ",
+      "                                                                                              1111  ",
+      "                                                                               111                  ",
+      "               11           111                  11            111                    111       11   ",
+      "          T         1            T        1            T             1     T        T        1       ",
+      "        1111    11       111       1111      111    11      1111      111     1111    11      111    ",
+      "                    1                   11              1                  11             1           ",
+      "   11       11       T       11       11    T    11       11   T   11       11    T   11       T     ",
+      "      T  11    T  1111    11    T  11    1111  11   T  11   1111     T  11    1111  11   T  1111     ",
+      "  111  11    111          111  11     111      111  11    111      111  11     111      111  11  1111",
+      " T        T        T  11    T      T      11 T       T      T  11   T      T      11 T       T  1111",
+      "11111 11111 111 1111111 11111 11111 111111111111 11111 11111 1111111 11111 11111 1111111 11111111 111",
+      "22222 22222 222 2222222 22222 22222 222222222222 22222 22222 2222222 22222 22222 2222222 22222222 222",
+    ],
+    playerStart: { x: 1, y: 12 },
+    wolves: [
+      { x: 6, y: 12, patrol: 3 },
+      { x: 14, y: 12, patrol: 2 },
+      { x: 24, y: 12, patrol: 3 },
+      { x: 35, y: 12, patrol: 4 },
+      { x: 48, y: 12, patrol: 3 },
+      { x: 58, y: 12, patrol: 2 },
+      { x: 68, y: 12, patrol: 4 },
+      { x: 78, y: 12, patrol: 3 },
+      { x: 88, y: 12, patrol: 3 },
+    ],
+    bugs: [
+      { x: 3, y: 8 }, { x: 9, y: 6 }, { x: 16, y: 4 }, { x: 22, y: 7 },
+      { x: 30, y: 5 }, { x: 38, y: 6 }, { x: 45, y: 7 }, { x: 53, y: 5 },
+      { x: 60, y: 8 }, { x: 67, y: 4 }, { x: 75, y: 6 }, { x: 83, y: 5 },
+      { x: 90, y: 7 }, { x: 95, y: 1 },
+    ],
+    superEggs: [{ x: 18, y: 5 }, { x: 52, y: 4 }, { x: 82, y: 5 }],
+  },
+  {
+    name: "Autumn Hollow",
+    cols: 85,
+    theme: 'fall',
+    sky: { top: '#4a2a1a', bottom: '#d4854a', sunColor: '#e8803a', sunGlow: '#cc6030', cloudColor: '#c4884a', cloudShadow: '#9a6030', starCount: 0 },
+    map: [
+      "                                                                                     ",
+      "                                                                                     ",
+      "                                                                                     ",
+      "                                                                                 P   ",
+      "                                                                               1111  ",
+      "                          111                                          11            ",
+      "         111                      111             111       111              111      ",
+      "                   11                    11                       11                  ",
+      "   11         111       11    111     111     11        111    111     111       11   ",
+      "      T    T       T       T       T       T      T        T       T       T     T   ",
+      "  111   11   1111   111  11   1111   111  111  11   1111  11   111  1111  111   1111  ",
+      "                                                                                     ",
+      " 1   T   111   T  111  T   111   T  111  T  111   T  111  T   111   T  111  T  11111 ",
+      "1111111111111 1111111111111111 111111111111111111111111111 11111111111111111111111 1111",
+      "2222222222222 2222222222222222 222222222222222222222222222 22222222222222222222222 2222",
+    ],
+    playerStart: { x: 1, y: 12 },
+    wolves: [
+      { x: 10, y: 12, patrol: 4 },
+      { x: 22, y: 12, patrol: 3 },
+      { x: 36, y: 12, patrol: 5 },
+      { x: 48, y: 12, patrol: 3 },
+      { x: 58, y: 12, patrol: 4 },
+      { x: 70, y: 12, patrol: 3 },
+      { x: 78, y: 12, patrol: 3 },
+    ],
+    bugs: [
+      { x: 4, y: 7 }, { x: 12, y: 5 }, { x: 20, y: 6 }, { x: 28, y: 4 },
+      { x: 35, y: 7 }, { x: 43, y: 5 }, { x: 52, y: 6 }, { x: 60, y: 8 },
+      { x: 67, y: 5 }, { x: 75, y: 3 }, { x: 80, y: 7 },
+    ],
+    superEggs: [{ x: 25, y: 4 }, { x: 55, y: 5 }],
+  },
+  {
+    name: "Frozen Peak",
+    cols: 90,
+    theme: 'winter',
+    sky: { top: '#1a2a4a', bottom: '#7a9abb', sunColor: '#dde8f0', sunGlow: '#bbd0e8', cloudColor: '#d8e4f0', cloudShadow: '#aabbcc', starCount: 12 },
+    map: [
+      "                                                                                          ",
+      "                                                                                          ",
+      "                                                                                      P   ",
+      "                                                                                    1111  ",
+      "                                                                          111             ",
+      "                      111                          111                          111111    ",
+      "       11                       111       11                  111   11                 11  ",
+      "                  11       11         111       11       111             111               ",
+      "  111        111       11       111         11       111      11    111       111    111   ",
+      "     T    T       T      T    T       T   T      T       T      T       T       T     T   ",
+      " 111  11   111  1111  11  111  1111  111   111 1111  111  1111  111  1111  111  1111 1111  ",
+      "                                                                                          ",
+      "1  T  111  T  111  T  111  T  111  T  111  T  111  T  111  T  111  T  111  T  111  T 1111 ",
+      "11111111111111111 1111111111111111 1111111111111111111111111111111 11111111111111111111 1111",
+      "22222222222222222 2222222222222222 2222222222222222222222222222222 22222222222222222222 2222",
+    ],
+    playerStart: { x: 1, y: 12 },
+    wolves: [
+      { x: 8, y: 12, patrol: 4 },
+      { x: 18, y: 12, patrol: 3 },
+      { x: 30, y: 12, patrol: 5 },
+      { x: 42, y: 12, patrol: 4 },
+      { x: 52, y: 12, patrol: 3 },
+      { x: 62, y: 12, patrol: 4 },
+      { x: 72, y: 12, patrol: 3 },
+      { x: 82, y: 12, patrol: 4 },
+    ],
+    bugs: [
+      { x: 3, y: 7 }, { x: 11, y: 5 }, { x: 19, y: 6 }, { x: 27, y: 7 },
+      { x: 34, y: 5 }, { x: 42, y: 6 }, { x: 50, y: 8 }, { x: 58, y: 5 },
+      { x: 66, y: 7 }, { x: 74, y: 4 }, { x: 82, y: 6 }, { x: 86, y: 2 },
+    ],
+    superEggs: [{ x: 20, y: 4 }, { x: 50, y: 5 }, { x: 78, y: 4 }],
+  },
+];
+
+// --- GAME STATE ---
+let currentLevel = 0;
+let levelCols = 75;
+let player, tiles, bugs, wolves, superEggs, particles, camera;
+let keys = {};
+let gameState = 'start';
+let animFrame = 0;
+let screenShake = 0;
+let levelTransition = 0;
+let levelTransitionDir = 0;
+let walkSoundTimer = 0;
+let hasBeatenGame = false;
+
+// --- INPUT ---
+window.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) {
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+// --- INIT LEVEL ---
+function initLevel(levelIdx) {
+  const level = levels[levelIdx];
+  levelCols = level.cols || 75;
+  tiles = [];
+  bugs = [];
+  wolves = [];
+  superEggs = [];
+  particles = [];
+  camera = { x: 0 };
+  levelStars = generateStars(level.sky.starCount || 0, levelIdx + 1);
+
+  // Parse map
+  for (let r = 0; r < ROWS; r++) {
+    tiles[r] = [];
+    const row = level.map[r] || '';
+    for (let c = 0; c < levelCols; c++) {
+      const ch = row[c] || ' ';
+      if (ch === '1') tiles[r][c] = level.theme === 'fall' ? 'fallGrass' : level.theme === 'winter' ? 'snow' : 'grass';
+      else if (ch === '2') tiles[r][c] = level.theme === 'fall' ? 'fallDirt' : level.theme === 'winter' ? 'winterDirt' : 'dirt';
+      else if (ch === 'T') tiles[r][c] = level.theme === 'fall' ? 'fallThorn' : level.theme === 'winter' ? 'winterThorn' : 'thorn';
+      else if (ch === 'P') tiles[r][c] = 'pen';
+      else tiles[r][c] = null;
+    }
+  }
+
+  // Player
+  player = {
+    x: level.playerStart.x * TILE,
+    y: level.playerStart.y * TILE,
+    w: 24,
+    h: 28,
+    vx: 0,
+    vy: 0,
+    onGround: false,
+    facing: 1,
+    health: 5,
+    maxHealth: 5,
+    walkFrame: 0,
+    invincible: 0,
+    superEggTimer: 0, // super egg invincibility countdown
+    dead: false,
+  };
+
+  // Wolves
+  level.wolves.forEach(w => {
+    wolves.push({
+      x: w.x * TILE,
+      y: w.y * TILE,
+      w: 30,
+      h: 28,
+      vx: 1,
+      vy: 0,
+      patrol: w.patrol * TILE,
+      startX: w.x * TILE,
+      facing: 1,
+      walkFrame: 0,
+      onGround: false,
+      stuckTimer: 0,
+      alive: true,
+    });
+  });
+
+  // Bugs
+  level.bugs.forEach(b => {
+    bugs.push({
+      x: b.x * TILE + 8,
+      y: b.y * TILE + 8,
+      w: 12,
+      h: 12,
+      alive: true,
+      bobOffset: Math.random() * Math.PI * 2,
+    });
+  });
+
+  // Super Eggs
+  (level.superEggs || []).forEach(e => {
+    superEggs.push({
+      x: e.x * TILE + 4,
+      y: e.y * TILE + 4,
+      w: 24,
+      h: 28,
+      alive: true,
+      bobOffset: Math.random() * Math.PI * 2,
+    });
+  });
+}
+
+// --- COLLISION ---
+function rectCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function isSolid(tile) {
+  return tile === 'grass' || tile === 'dirt' ||
+         tile === 'fallGrass' || tile === 'fallDirt' ||
+         tile === 'snow' || tile === 'winterDirt';
+}
+
+// --- PARTICLES ---
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 4,
+      vy: (Math.random() - 1) * 4,
+      life: 30 + Math.random() * 20,
+      color,
+      size: 2 + Math.random() * 3,
+    });
+  }
+}
+
+// --- UPDATE ---
+function update() {
+  if (gameState !== 'playing') return;
+  animFrame++;
+
+  // Level transition
+  if (levelTransition > 0) {
+    levelTransition -= 2;
+    if (levelTransition <= 0 && levelTransitionDir === 1) {
+      if (currentLevel < levels.length - 1) {
+        currentLevel++;
+        initLevel(currentLevel);
+        levelTransition = 100;
+        levelTransitionDir = -1;
+        startMusic();
+      } else {
+        gameState = 'won';
+        hasBeatenGame = true;
+        stopMusic();
+        playSound('win');
+        document.getElementById('winScreen').classList.remove('hidden');
+      }
+    }
+    return;
+  }
+
+  // Player movement
+  const speed = 3;
+  if (keys['arrowleft'] || keys['a']) {
+    player.vx = -speed;
+    player.facing = -1;
+  } else if (keys['arrowright'] || keys['d'] || keys['w']) {
+    player.vx = speed;
+    player.facing = 1;
+  } else if (keys['arrowdown'] || keys['s']) {
+    player.vx = -speed;
+    player.facing = -1;
+  } else {
+    player.vx = 0;
+  }
+
+  if ((keys['arrowup'] || keys[' ']) && player.onGround) {
+    player.vy = JUMP_FORCE;
+    player.onGround = false;
+    playSound('jump');
+  }
+
+  // Walk animation + footstep sounds
+  if (Math.abs(player.vx) > 0 && player.onGround) {
+    player.walkFrame += 0.15;
+    walkSoundTimer++;
+    if (walkSoundTimer % 12 === 0) playSound('walk');
+  } else {
+    player.walkFrame = 0;
+    walkSoundTimer = 0;
+  }
+
+  // Gravity
+  player.vy += GRAVITY;
+  if (player.vy > 12) player.vy = 12;
+
+  // Move X
+  player.x += player.vx;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < levelCols; c++) {
+      if (isSolid(tiles[r][c])) {
+        const tileRect = { x: c * TILE, y: r * TILE, w: TILE, h: TILE };
+        if (rectCollide(player, tileRect)) {
+          if (player.vx > 0) player.x = tileRect.x - player.w;
+          else if (player.vx < 0) player.x = tileRect.x + TILE;
+        }
+      }
+    }
+  }
+
+  // Move Y
+  player.y += player.vy;
+  player.onGround = false;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < levelCols; c++) {
+      if (isSolid(tiles[r][c])) {
+        const tileRect = { x: c * TILE, y: r * TILE, w: TILE, h: TILE };
+        if (rectCollide(player, tileRect)) {
+          if (player.vy > 0) {
+            player.y = tileRect.y - player.h;
+            player.vy = 0;
+            player.onGround = true;
+          } else if (player.vy < 0) {
+            player.y = tileRect.y + TILE;
+            player.vy = 0;
+          }
+        }
+      }
+    }
+  }
+
+  // Clamp to world
+  const worldW = levelCols * TILE;
+  if (player.x < 0) player.x = 0;
+  if (player.x > worldW - player.w) player.x = worldW - player.w;
+
+  // Fall into pit
+  if (player.y > H) {
+    playerDie();
+    return;
+  }
+
+  // Super egg timer
+  if (player.superEggTimer > 0) {
+    player.superEggTimer--;
+    // Sparkle particles while powered up
+    if (animFrame % 4 === 0) {
+      spawnParticles(
+        player.x + Math.random() * player.w,
+        player.y + Math.random() * player.h,
+        C.eggSparkle, 1
+      );
+    }
+    if (player.superEggTimer === 0) {
+      player.invincible = 0;
+      music.bpm = music.baseBpm; // back to normal tempo
+    }
+  }
+
+  // Invincibility timer (only for damage flash, not super egg)
+  if (player.invincible > 0 && player.superEggTimer === 0) player.invincible--;
+
+  // Thorn collision
+  if (player.superEggTimer === 0) {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < levelCols; c++) {
+        const t = tiles[r][c];
+        if (t === 'thorn' || t === 'fallThorn' || t === 'winterThorn') {
+          const thornRect = { x: c * TILE + 4, y: r * TILE + 8, w: TILE - 8, h: TILE - 8 };
+          if (rectCollide(player, thornRect)) {
+            hurtPlayer();
+          }
+        }
+      }
+    }
+  }
+
+  // Pen collision (goal)
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < levelCols; c++) {
+      if (tiles[r][c] === 'pen') {
+        const penRect = { x: c * TILE, y: r * TILE, w: TILE, h: TILE };
+        if (rectCollide(player, penRect)) {
+          levelTransition = 100;
+          levelTransitionDir = 1;
+          spawnParticles(player.x + 12, player.y + 14, '#f5c542', 20);
+          stopMusic();
+          playSound('levelComplete');
+          return;
+        }
+      }
+    }
+  }
+
+  // Wolf update & collision
+  wolves.forEach(wolf => {
+    if (!wolf.alive) return;
+
+    // Apply gravity to wolves
+    wolf.vy = (wolf.vy || 0) + GRAVITY * 0.8;
+    if (wolf.vy > 10) wolf.vy = 10;
+
+    // Move X
+    const prevX = wolf.x;
+    wolf.x += wolf.vx;
+    wolf.walkFrame += 0.1;
+
+    // Patrol boundary - reverse at limits
+    if (wolf.x > wolf.startX + wolf.patrol || wolf.x < wolf.startX - wolf.patrol) {
+      wolf.vx *= -1;
+      wolf.x = prevX;
+      wolf.facing = wolf.vx > 0 ? 1 : -1;
+    }
+
+    // Wall collision - check the leading edge
+    const leadX = wolf.vx > 0 ? wolf.x + wolf.w : wolf.x;
+    const leadCol = Math.floor(leadX / TILE);
+    if (leadCol >= 0 && leadCol < levelCols) {
+      const bodyTop = Math.floor(wolf.y / TILE);
+      const bodyBot = Math.floor((wolf.y + wolf.h - 1) / TILE);
+      for (let r = bodyTop; r <= bodyBot; r++) {
+        if (r >= 0 && r < ROWS && isSolid(tiles[r][leadCol])) {
+          if (wolf.vx > 0) wolf.x = leadCol * TILE - wolf.w;
+          else wolf.x = (leadCol + 1) * TILE;
+          wolf.vx *= -1;
+          wolf.facing = wolf.vx > 0 ? 1 : -1;
+          break;
+        }
+      }
+    }
+
+    // Edge detection - check if ground exists ahead, one row below wolf's feet
+    const feetRow = Math.floor((wolf.y + wolf.h - 1) / TILE) + 1;
+    const aheadX = wolf.vx > 0 ? wolf.x + wolf.w + 2 : wolf.x - 2;
+    const aheadCol = Math.floor(aheadX / TILE);
+    if (feetRow >= 0 && feetRow < ROWS && aheadCol >= 0 && aheadCol < levelCols) {
+      if (!isSolid(tiles[feetRow][aheadCol])) {
+        wolf.vx *= -1;
+        wolf.x = prevX;
+        wolf.facing = wolf.vx > 0 ? 1 : -1;
+      }
+    }
+
+    // Move Y (gravity)
+    wolf.y += wolf.vy;
+    wolf.onGround = false;
+    const wolfLeft = Math.floor(wolf.x / TILE);
+    const wolfRight = Math.floor((wolf.x + wolf.w - 1) / TILE);
+    for (let c = wolfLeft; c <= wolfRight; c++) {
+      if (c < 0 || c >= levelCols) continue;
+      const rowBelow = Math.floor((wolf.y + wolf.h) / TILE);
+      if (rowBelow >= 0 && rowBelow < ROWS && isSolid(tiles[rowBelow][c])) {
+        wolf.y = rowBelow * TILE - wolf.h;
+        wolf.vy = 0;
+        wolf.onGround = true;
+      }
+    }
+
+    // Stuck detection - if wolf hasn't moved much, jump over obstacle
+    wolf.stuckTimer = wolf.stuckTimer || 0;
+    if (Math.abs(wolf.x - prevX) < 0.1 && wolf.onGround) {
+      wolf.stuckTimer++;
+      if (wolf.stuckTimer > 30) {
+        wolf.vy = JUMP_FORCE * 0.75;
+        wolf.onGround = false;
+        wolf.stuckTimer = 0;
+      }
+    } else {
+      wolf.stuckTimer = 0;
+    }
+
+    // Fall off screen
+    if (wolf.y > H + 64) {
+      wolf.alive = false;
+      return;
+    }
+
+    if (rectCollide(player, wolf)) {
+      if (player.superEggTimer > 0) {
+        wolf.alive = false;
+        spawnParticles(wolf.x + 15, wolf.y + 14, '#888', 15);
+        spawnParticles(wolf.x + 15, wolf.y + 14, C.eggSparkle, 8);
+        playSound('wolfDestroy');
+      } else {
+        hurtPlayer();
+      }
+    }
+  });
+
+  // Super egg collection
+  superEggs.forEach(egg => {
+    if (!egg.alive) return;
+    const bob = Math.sin(animFrame * 0.06 + egg.bobOffset) * 4;
+    const eggRect = { x: egg.x, y: egg.y + bob, w: egg.w, h: egg.h };
+    if (rectCollide(player, eggRect)) {
+      egg.alive = false;
+      player.superEggTimer = SUPER_EGG_DURATION;
+      player.invincible = SUPER_EGG_DURATION;
+      music.bpm = music.baseBpm * 1.5; // speed up the music!
+      spawnParticles(egg.x + 12, egg.y + 14, C.eggGlow, 15);
+      spawnParticles(egg.x + 12, egg.y + 14, C.eggSparkle, 10);
+      playSound('superEgg');
+    }
+  });
+
+  // Bug collection
+  bugs.forEach(bug => {
+    if (!bug.alive) return;
+    const bugRect = { x: bug.x - 6, y: bug.y - 6, w: bug.w, h: bug.h };
+    if (rectCollide(player, bugRect)) {
+      bug.alive = false;
+      if (player.health < player.maxHealth) player.health++;
+      spawnParticles(bug.x, bug.y, '#aaddff', 8);
+      playSound('eat');
+    }
+  });
+
+  // Particles
+  particles.forEach(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.1;
+    p.life--;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  // Camera - follow player, smooth
+  const targetCamX = player.x - W / 2 + player.w / 2;
+  const maxCamX = levelCols * TILE - W;
+  camera.x += (targetCamX - camera.x) * 0.1;
+  if (camera.x < 0) camera.x = 0;
+  if (camera.x > maxCamX) camera.x = maxCamX;
+
+  // Screen shake
+  if (screenShake > 0) screenShake--;
+}
+
+function hurtPlayer() {
+  if (player.invincible > 0) return;
+  player.health--;
+  player.invincible = 60;
+  screenShake = 10;
+  spawnParticles(player.x + 12, player.y + 14, '#e03030', 6);
+  if (player.health <= 0) {
+    playerDie();
+  } else {
+    playSound('hurt');
+  }
+}
+
+function playerDie() {
+  player.dead = true;
+  gameState = 'dead';
+  spawnParticles(player.x + 12, player.y + 14, '#f5f0e0', 15);
+  stopMusic();
+  playSound('die');
+  document.getElementById('deathScreen').classList.remove('hidden');
+}
+
+// --- DRAW ---
+function drawPixelRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.floor(x), Math.floor(y), w, h);
+}
+
+// Pre-generate star positions per level (seeded by level index)
+function generateStars(count, seed) {
+  const stars = [];
+  let rng = seed * 9301 + 49297;
+  for (let i = 0; i < count; i++) {
+    rng = (rng * 9301 + 49297) % 233280;
+    const x = (rng / 233280) * W;
+    rng = (rng * 9301 + 49297) % 233280;
+    const y = (rng / 233280) * (H * 0.5);
+    rng = (rng * 9301 + 49297) % 233280;
+    const size = (rng / 233280) > 0.7 ? 3 : 2;
+    rng = (rng * 9301 + 49297) % 233280;
+    const twinkleOffset = (rng / 233280) * Math.PI * 2;
+    stars.push({ x, y, size, twinkleOffset });
+  }
+  return stars;
+}
+
+let levelStars = [];
+
+function drawBackground() {
+  const sky = levels[currentLevel].sky;
+
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, sky.top);
+  grad.addColorStop(1, sky.bottom);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars (night level)
+  if (levelStars.length > 0) {
+    levelStars.forEach(star => {
+      const twinkle = Math.sin(animFrame * 0.05 + star.twinkleOffset);
+      ctx.globalAlpha = 0.5 + twinkle * 0.4;
+      const sx = (star.x - camera.x * 0.03 + W) % W;
+      drawPixelRect(sx, star.y, star.size, star.size, '#fff');
+    });
+    ctx.globalAlpha = 1;
+    // Moon for night level
+    const moonX = 650 - camera.x * 0.05;
+    drawPixelRect(moonX, 25, 36, 36, sky.sunGlow);
+    drawPixelRect(moonX + 4, 29, 28, 28, sky.sunColor);
+    // Moon crater details
+    drawPixelRect(moonX + 10, 35, 6, 6, sky.sunGlow);
+    drawPixelRect(moonX + 20, 40, 4, 4, sky.sunGlow);
+    drawPixelRect(moonX + 14, 46, 5, 5, sky.sunGlow);
+  } else {
+    // Sun (fixed position, parallax)
+    const sunX = 680 - camera.x * 0.05;
+    drawPixelRect(sunX, 30, 32, 32, sky.sunGlow);
+    drawPixelRect(sunX + 4, 34, 24, 24, sky.sunColor);
+  }
+
+  // Clouds (parallax - move slower than camera)
+  const cloudY = [40, 70, 50, 35, 65];
+  const cloudX = [80, 350, 600, 900, 1200];
+  cloudX.forEach((cx, i) => {
+    const bx = (cx + animFrame * 0.15 - camera.x * 0.2) % (W + 200) - 60;
+    drawPixelRect(bx, cloudY[i], 48, 12, sky.cloudShadow);
+    drawPixelRect(bx, cloudY[i] - 4, 48, 12, sky.cloudColor);
+    drawPixelRect(bx + 12, cloudY[i] - 12, 24, 12, sky.cloudColor);
+  });
+}
+
+function drawTile(c, r) {
+  const x = c * TILE - camera.x;
+  const y = r * TILE;
+
+  // Cull off-screen tiles
+  if (x < -TILE || x > W + TILE) return;
+
+  const tile = tiles[r][c];
+  if (!tile) return;
+
+  if (tile === 'grass') {
+    drawPixelRect(x, y, TILE, TILE, C.grass);
+    if (r === 0 || !isSolid(tiles[r - 1]?.[c])) {
+      drawPixelRect(x, y, TILE, 4, C.grassLight);
+      for (let i = 0; i < 4; i++) {
+        drawPixelRect(x + i * 8 + 2, y - 2, 2, 4, C.grassLight);
+      }
+    }
+    drawPixelRect(x + 4, y + 12, 4, 4, C.grassLight);
+    drawPixelRect(x + 20, y + 20, 4, 4, C.grassLight);
+  } else if (tile === 'dirt') {
+    drawPixelRect(x, y, TILE, TILE, C.dirt);
+    drawPixelRect(x + 8, y + 8, 4, 4, C.dirtDark);
+    drawPixelRect(x + 20, y + 16, 4, 4, C.dirtDark);
+    drawPixelRect(x + 4, y + 24, 4, 4, C.dirtDark);
+  } else if (tile === 'thorn') {
+    drawPixelRect(x + 4, y + 12, 24, 18, C.thorn);
+    drawPixelRect(x + 8, y + 6, 16, 8, C.thorn);
+    drawPixelRect(x + 6, y + 6, 2, 6, C.thornTip);
+    drawPixelRect(x + 14, y + 2, 2, 6, C.thornTip);
+    drawPixelRect(x + 22, y + 6, 2, 6, C.thornTip);
+    drawPixelRect(x + 10, y + 8, 2, 4, C.thornTip);
+    drawPixelRect(x + 18, y + 4, 2, 6, C.thornTip);
+    drawPixelRect(x + 8, y + 16, 4, 4, '#aa2222');
+    drawPixelRect(x + 18, y + 18, 4, 4, '#aa2222');
+  // --- Fall tiles ---
+  } else if (tile === 'fallGrass') {
+    drawPixelRect(x, y, TILE, TILE, C.fallGrass);
+    if (r === 0 || !isSolid(tiles[r - 1]?.[c])) {
+      drawPixelRect(x, y, TILE, 4, C.fallGrassLight);
+      // Fallen leaves on top
+      drawPixelRect(x + 3, y - 2, 4, 3, C.fallLeaf1);
+      drawPixelRect(x + 14, y - 3, 4, 3, C.fallLeaf2);
+      drawPixelRect(x + 24, y - 2, 3, 3, C.fallLeaf1);
+    }
+    drawPixelRect(x + 6, y + 14, 4, 4, C.fallGrassLight);
+    drawPixelRect(x + 18, y + 22, 4, 4, C.fallGrassLight);
+  } else if (tile === 'fallDirt') {
+    drawPixelRect(x, y, TILE, TILE, C.fallDirt);
+    drawPixelRect(x + 8, y + 8, 4, 4, C.fallDirtDark);
+    drawPixelRect(x + 20, y + 16, 4, 4, C.fallDirtDark);
+    drawPixelRect(x + 4, y + 24, 4, 4, C.fallDirtDark);
+  } else if (tile === 'fallThorn') {
+    // Dead/autumn thorn bush
+    drawPixelRect(x + 4, y + 12, 24, 18, C.fallThorn);
+    drawPixelRect(x + 8, y + 6, 16, 8, C.fallThorn);
+    drawPixelRect(x + 6, y + 6, 2, 6, C.fallThornTip);
+    drawPixelRect(x + 14, y + 2, 2, 6, C.fallThornTip);
+    drawPixelRect(x + 22, y + 6, 2, 6, C.fallThornTip);
+    drawPixelRect(x + 10, y + 8, 2, 4, C.fallThornTip);
+    drawPixelRect(x + 18, y + 4, 2, 6, C.fallThornTip);
+    drawPixelRect(x + 9, y + 14, 3, 3, C.fallLeaf2);
+    drawPixelRect(x + 19, y + 16, 3, 3, C.fallLeaf1);
+  // --- Winter tiles ---
+  } else if (tile === 'snow') {
+    drawPixelRect(x, y, TILE, TILE, C.snow);
+    if (r === 0 || !isSolid(tiles[r - 1]?.[c])) {
+      // Snow cap on top
+      drawPixelRect(x, y - 2, TILE, 6, C.snowLight);
+      drawPixelRect(x + 4, y - 4, 8, 4, C.snowLight);
+      drawPixelRect(x + 20, y - 4, 8, 4, C.snowLight);
+    }
+    // Snow texture sparkle
+    drawPixelRect(x + 6, y + 10, 2, 2, C.snowLight);
+    drawPixelRect(x + 20, y + 18, 2, 2, C.snowLight);
+    drawPixelRect(x + 14, y + 24, 2, 2, C.snowLight);
+  } else if (tile === 'winterDirt') {
+    drawPixelRect(x, y, TILE, TILE, C.winterDirt);
+    drawPixelRect(x + 8, y + 8, 4, 4, C.winterDirtDark);
+    drawPixelRect(x + 20, y + 16, 4, 4, C.winterDirtDark);
+    drawPixelRect(x + 4, y + 24, 4, 4, C.winterDirtDark);
+    // Frost patches
+    drawPixelRect(x + 12, y + 4, 6, 2, C.ice);
+  } else if (tile === 'winterThorn') {
+    // Frozen thorn bush with icicles
+    drawPixelRect(x + 4, y + 12, 24, 18, C.winterThorn);
+    drawPixelRect(x + 8, y + 6, 16, 8, C.winterThorn);
+    drawPixelRect(x + 6, y + 6, 2, 6, C.winterThornTip);
+    drawPixelRect(x + 14, y + 2, 2, 6, C.winterThornTip);
+    drawPixelRect(x + 22, y + 6, 2, 6, C.winterThornTip);
+    // Icicles hanging down
+    drawPixelRect(x + 8, y + 28, 2, 6, C.icicle);
+    drawPixelRect(x + 16, y + 28, 2, 8, C.icicle);
+    drawPixelRect(x + 22, y + 28, 2, 5, C.icicle);
+    // Snow on top
+    drawPixelRect(x + 6, y + 4, 20, 3, C.snowLight);
+  } else if (tile === 'pen') {
+    drawPixelRect(x, y, TILE, TILE, C.pen);
+    drawPixelRect(x + 2, y + 2, TILE - 4, TILE - 4, C.penDark);
+    drawPixelRect(x + 10, y + 10, 12, 20, '#3a2a1a');
+    drawPixelRect(x + 14, y + 18, 4, 4, C.pen);
+    drawPixelRect(x - 2, y - 2, TILE + 4, 6, '#8b2020');
+    drawPixelRect(x + 2, y - 6, TILE - 4, 6, '#a03030');
+    if (Math.floor(animFrame / 15) % 2 === 0) {
+      drawPixelRect(x + 14, y - 10, 4, 4, '#f5e642');
+    }
+  }
+}
+
+function drawChicken(p) {
+  if (p.dead) return;
+
+  // During super egg: rainbow glow instead of damage flash
+  if (p.superEggTimer > 0) {
+    // Flicker near end (last 1.5 seconds)
+    if (p.superEggTimer < 90 && Math.floor(p.superEggTimer / 6) % 2 === 0) {
+      // Skip drawing every other frame near end to warn player
+    }
+  } else {
+    const flash = p.invincible > 0 && Math.floor(p.invincible / 4) % 2 === 0;
+    if (flash) return;
+  }
+
+  const x = Math.floor(p.x - camera.x);
+  const y = Math.floor(p.y);
+  const f = p.facing;
+  const bob = p.onGround ? Math.floor(Math.sin(p.walkFrame * 3) * 2) : 0;
+  const legSwing = p.onGround ? Math.floor(Math.sin(p.walkFrame * 6) * 3) : 2;
+
+  const isSuper = p.superEggTimer > 0;
+
+  // Golden glow aura when super
+  if (isSuper) {
+    ctx.globalAlpha = 0.3 + Math.sin(animFrame * 0.15) * 0.15;
+    drawPixelRect(x - 4, y - 4 + bob, 32, 36, C.eggGlow);
+    ctx.globalAlpha = 1;
+  }
+
+  // Shadow
+  drawPixelRect(x + 2, y + 26, 20, 4, 'rgba(0,0,0,0.15)');
+
+  // Use golden colors when super
+  const bodyColor = isSuper ? C.eggGlow : C.chickenBody;
+  const wingColor = isSuper ? '#e8b830' : C.chickenWing;
+
+  // Feet
+  drawPixelRect(x + 6 - legSwing, y + 22, 4, 6, C.chickenFeet);
+  drawPixelRect(x + 14 + legSwing, y + 22, 4, 6, C.chickenFeet);
+
+  // Body
+  drawPixelRect(x + 4, y + 8 + bob, 16, 16, bodyColor);
+  drawPixelRect(x + 2, y + 10 + bob, 20, 12, bodyColor);
+
+  // Wing
+  const wingX = f === 1 ? x + 2 : x + 14;
+  drawPixelRect(wingX, y + 12 + bob, 8, 8, wingColor);
+
+  // Tail feathers
+  const tailX = f === 1 ? x : x + 20;
+  drawPixelRect(tailX, y + 6 + bob, 4, 6, bodyColor);
+  drawPixelRect(tailX + (f === 1 ? -2 : 2), y + 4 + bob, 4, 4, wingColor);
+
+  // Cape (after beating the game!)
+  if (hasBeatenGame) {
+    const capeX = f === 1 ? x - 2 : x + 14;
+    const capeFlutter = Math.sin(animFrame * 0.15 + p.walkFrame * 2) * 2;
+    const capeColor = '#cc2222';
+    const capeDark = '#991111';
+    // Cape attached at neck, flowing behind
+    drawPixelRect(capeX, y + 4 + bob, 10, 4, capeColor);
+    drawPixelRect(capeX + (f === 1 ? -2 : 2), y + 8 + bob, 12, 6, capeColor);
+    drawPixelRect(capeX + (f === 1 ? -4 : 4), y + 14 + bob + capeFlutter, 12, 6, capeColor);
+    drawPixelRect(capeX + (f === 1 ? -4 : 4), y + 20 + bob + capeFlutter * 1.5, 10, 4, capeDark);
+    // Cape highlight
+    drawPixelRect(capeX + (f === 1 ? 2 : 6), y + 6 + bob, 2, 8, '#dd4444');
+  }
+
+  // Head
+  const headX = f === 1 ? x + 12 : x + 4;
+  drawPixelRect(headX, y + 2 + bob, 10, 10, bodyColor);
+
+  // Comb
+  drawPixelRect(headX + 2, y - 2 + bob, 6, 4, C.chickenComb);
+  drawPixelRect(headX + 4, y - 4 + bob, 4, 4, C.chickenComb);
+
+  // Eye - angry when super!
+  const eyeX = f === 1 ? headX + 6 : headX + 2;
+  drawPixelRect(eyeX, y + 4 + bob, 3, 3, isSuper ? '#e03030' : C.chickenEye);
+  drawPixelRect(eyeX, y + 4 + bob, 1, 1, '#fff');
+
+  // Beak
+  const beakX = f === 1 ? headX + 10 : headX - 4;
+  drawPixelRect(beakX, y + 6 + bob, 4, 3, C.chickenBeak);
+}
+
+function drawWolf(wolf) {
+  if (!wolf.alive) return;
+
+  const x = Math.floor(wolf.x - camera.x);
+  const y = Math.floor(wolf.y);
+
+  // Cull off-screen
+  if (x < -40 || x > W + 40) return;
+
+  const f = wolf.facing;
+  const legSwing = Math.floor(Math.sin(wolf.walkFrame * 4) * 3);
+
+  drawPixelRect(x + 2, y + 26, 26, 4, 'rgba(0,0,0,0.15)');
+  drawPixelRect(x + 4 - legSwing, y + 20, 4, 10, C.wolfDark);
+  drawPixelRect(x + 22 + legSwing, y + 20, 4, 10, C.wolfDark);
+  drawPixelRect(x + 2, y + 8, 26, 14, C.wolfBody);
+  drawPixelRect(x + 4, y + 6, 22, 16, C.wolfBody);
+  drawPixelRect(x + 8, y + 16, 14, 6, '#777');
+
+  const tailX = f === 1 ? x - 4 : x + 28;
+  drawPixelRect(tailX, y + 4, 6, 4, C.wolfBody);
+  drawPixelRect(tailX + (f === 1 ? -2 : 2), y + 2, 4, 4, C.wolfBody);
+
+  const headX = f === 1 ? x + 20 : x - 2;
+  drawPixelRect(headX, y + 2, 12, 12, C.wolfBody);
+  drawPixelRect(headX + 2, y - 4, 4, 6, C.wolfBody);
+  drawPixelRect(headX + 8, y - 4, 4, 6, C.wolfBody);
+
+  const eyeX = f === 1 ? headX + 8 : headX + 2;
+  drawPixelRect(eyeX, y + 4, 3, 3, C.wolfEye);
+
+  const snoutX = f === 1 ? headX + 10 : headX - 4;
+  drawPixelRect(snoutX, y + 8, 6, 4, C.wolfDark);
+  drawPixelRect(snoutX + 1, y + 10, 2, 2, C.wolfTeeth);
+  drawPixelRect(snoutX + 3, y + 10, 2, 2, C.wolfTeeth);
+}
+
+function drawBug(bug) {
+  if (!bug.alive) return;
+  const bob = Math.sin(animFrame * 0.08 + bug.bobOffset) * 4;
+  const x = Math.floor(bug.x - camera.x);
+  const y = Math.floor(bug.y + bob);
+
+  if (x < -20 || x > W + 20) return;
+
+  const wingFlap = Math.sin(animFrame * 0.3 + bug.bobOffset) * 2;
+  drawPixelRect(x - 4, y - 2 + wingFlap, 6, 4, C.bugWing);
+  drawPixelRect(x + 4, y - 2 - wingFlap, 6, 4, C.bugWing);
+  drawPixelRect(x, y, 6, 6, C.bug);
+  drawPixelRect(x + 1, y + 1, 4, 4, '#5a4a3a');
+}
+
+function drawSuperEgg(egg) {
+  if (!egg.alive) return;
+  const bob = Math.sin(animFrame * 0.06 + egg.bobOffset) * 4;
+  const x = Math.floor(egg.x - camera.x);
+  const y = Math.floor(egg.y + bob);
+
+  if (x < -40 || x > W + 40) return;
+
+  // Glow pulse
+  const glowSize = 2 + Math.sin(animFrame * 0.1) * 2;
+  ctx.globalAlpha = 0.25 + Math.sin(animFrame * 0.08) * 0.1;
+  drawPixelRect(x - glowSize, y - glowSize, egg.w + glowSize * 2, egg.h + glowSize * 2, C.eggGlow);
+  ctx.globalAlpha = 1;
+
+  // Egg shape - oval/egg
+  drawPixelRect(x + 4, y, 16, 4, C.eggShell);       // top
+  drawPixelRect(x + 2, y + 4, 20, 8, C.eggShell);   // middle wide
+  drawPixelRect(x, y + 8, 24, 10, C.eggShell);       // widest
+  drawPixelRect(x + 2, y + 18, 20, 6, C.eggShell);   // lower
+  drawPixelRect(x + 6, y + 24, 12, 4, C.eggShell);   // bottom
+
+  // Golden star/sparkle on egg
+  const sparkle = Math.floor(animFrame / 10) % 3;
+  drawPixelRect(x + 8 + sparkle * 2, y + 10, 4, 4, C.eggSparkle);
+  drawPixelRect(x + 10, y + 8 + sparkle, 4, 4, C.eggSparkle);
+
+  // Floating sparkle particles around egg
+  for (let i = 0; i < 3; i++) {
+    const angle = animFrame * 0.04 + i * (Math.PI * 2 / 3);
+    const sx = x + 12 + Math.cos(angle) * 16;
+    const sy = y + 14 + Math.sin(angle) * 10;
+    if (Math.floor(animFrame / 8 + i) % 2 === 0) {
+      drawPixelRect(sx, sy, 2, 2, C.eggSparkle);
+    }
+  }
+}
+
+function drawHUD() {
+  // HUD draws in screen space (no camera offset)
+  // Health hearts
+  for (let i = 0; i < player.maxHealth; i++) {
+    const hx = 12 + i * 24;
+    const hy = 12;
+    const color = i < player.health ? C.heart : C.heartEmpty;
+    drawPixelRect(hx + 2, hy, 4, 2, color);
+    drawPixelRect(hx + 10, hy, 4, 2, color);
+    drawPixelRect(hx, hy + 2, 16, 4, color);
+    drawPixelRect(hx + 2, hy + 6, 12, 4, color);
+    drawPixelRect(hx + 4, hy + 10, 8, 2, color);
+    drawPixelRect(hx + 6, hy + 12, 4, 2, color);
+  }
+
+  // Super egg timer bar
+  if (player.superEggTimer > 0) {
+    const barW = 120;
+    const barH = 8;
+    const bx = 12;
+    const by = 32;
+    const fill = (player.superEggTimer / SUPER_EGG_DURATION) * barW;
+    drawPixelRect(bx, by, barW, barH, '#333');
+    const barColor = player.superEggTimer < 90 ? '#e8a020' : C.eggGlow;
+    drawPixelRect(bx, by, fill, barH, barColor);
+    drawPixelRect(bx, by, barW, 2, 'rgba(255,255,255,0.3)');
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px monospace';
+    ctx.fillText('SUPER EGG', bx + barW + 6, by + 7);
+  }
+
+  // Level name
+  ctx.fillStyle = '#fff';
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(`Level ${currentLevel + 1}: ${levels[currentLevel].name}`, W - 12, 24);
+  ctx.textAlign = 'left';
+
+  // Bug count
+  const aliveBugs = bugs.filter(b => b.alive).length;
+  const totalBugs = bugs.length;
+  ctx.fillStyle = '#aaddff';
+  ctx.fillText(`Bugs: ${totalBugs - aliveBugs}/${totalBugs}`, W - 120, 44);
+}
+
+function draw() {
+  ctx.save();
+
+  // Screen shake
+  if (screenShake > 0) {
+    ctx.translate(
+      (Math.random() - 0.5) * screenShake,
+      (Math.random() - 0.5) * screenShake
+    );
+  }
+
+  drawBackground();
+
+  // Tiles - only draw visible columns
+  const startCol = Math.max(0, Math.floor(camera.x / TILE) - 1);
+  const endCol = Math.min(levelCols, Math.ceil((camera.x + W) / TILE) + 1);
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = startCol; c < endCol; c++) {
+      drawTile(c, r);
+    }
+  }
+
+  // Super eggs
+  superEggs.forEach(drawSuperEgg);
+
+  // Bugs
+  bugs.forEach(drawBug);
+
+  // Wolves
+  wolves.forEach(drawWolf);
+
+  // Player
+  if (gameState === 'playing' || gameState === 'won') {
+    drawChicken(player);
+  }
+
+  // Particles
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life / 50;
+    drawPixelRect(p.x - camera.x, p.y, p.size, p.size, p.color);
+  });
+  ctx.globalAlpha = 1;
+
+  // HUD
+  if (gameState === 'playing') drawHUD();
+
+  // Level transition overlay
+  if (levelTransition > 0) {
+    ctx.fillStyle = '#000';
+    ctx.globalAlpha = levelTransition / 100;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+    if (levelTransitionDir === -1) {
+      ctx.fillStyle = '#f5c542';
+      ctx.font = '24px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(levels[currentLevel].name, W / 2, H / 2);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  ctx.restore();
+}
+
+// --- GAME LOOP ---
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+function startGame() {
+  document.getElementById('startScreen').classList.add('hidden');
+  document.getElementById('winScreen').classList.add('hidden');
+  document.getElementById('deathScreen').classList.add('hidden');
+  currentLevel = 0;
+  initLevel(currentLevel);
+  gameState = 'playing';
+  levelTransition = 100;
+  levelTransitionDir = -1;
+  startMusic();
+}
+
+// Start loop
+initLevel(0);
+gameLoop();
+</script>
+</body>
+</html>
