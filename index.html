@@ -136,7 +136,6 @@
     bottom: 0;
     left: 0;
     right: 0;
-    height: 160px;
     z-index: 100;
     pointer-events: none;
     user-select: none;
@@ -177,17 +176,11 @@
       height: 100dvh;
       overflow: hidden;
     }
-    #gameContainer { width: 100vw; height: 100vh; height: 100dvh; }
-    canvas {
-      width: 100vw;
-      height: 100vh;
-      height: 100dvh;
-      border: none;
-      border-radius: 0;
-      object-fit: contain;
-    }
+    canvas { border: none; border-radius: 0; }
     #touchControls { display: block; }
     #startScreen, #winScreen, #deathScreen {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
       font-size: 14px;
       overflow-y: auto;
       justify-content: flex-start;
@@ -199,18 +192,9 @@
   }
 
   @media (max-width: 840px) and (orientation: landscape) {
-    #startScreen, #winScreen, #deathScreen {
-      padding: 10px;
-    }
-    #startScreen h1, #winScreen h1, #deathScreen h1 {
-      font-size: 22px;
-      margin-bottom: 4px;
-    }
-    #startScreen p, #winScreen p, #deathScreen p {
-      font-size: 11px;
-      margin-bottom: 4px;
-      line-height: 1.3;
-    }
+    #startScreen, #winScreen, #deathScreen { padding: 10px; }
+    #startScreen h1, #winScreen h1, #deathScreen h1 { font-size: 22px; margin-bottom: 4px; }
+    #startScreen p, #winScreen p, #deathScreen p { font-size: 11px; margin-bottom: 4px; line-height: 1.3; }
     .btn { font-size: 14px; padding: 8px 20px; margin-top: 4px; }
     #highScoreBanner { margin-top: 6px; padding: 6px 14px; font-size: 14px; }
     #highScoreBanner .hs-name { font-size: 16px; }
@@ -274,6 +258,65 @@ const ROWS = H / TILE;  // 15
 const GRAVITY = 0.55;
 const JUMP_FORCE = -10;
 const SUPER_EGG_DURATION = 300; // 5 seconds at 60fps
+const GAME_ASPECT = W / H; // 800/480 = 5/3
+
+// --- RESPONSIVE SCALING ---
+const isMobile = () => window.innerWidth <= 840;
+const container = document.getElementById('gameContainer');
+const CTRL_HEIGHT = 110; // reserved space for touch controls in portrait
+
+function resizeCanvas() {
+  if (!isMobile()) {
+    // Desktop: reset to native size
+    container.style.width = '';
+    container.style.height = '';
+    canvas.style.width = '';
+    canvas.style.height = '';
+    canvas.style.position = '';
+    canvas.style.left = '';
+    canvas.style.top = '';
+    return;
+  }
+
+  const vw = window.innerWidth;
+  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  const isLandscape = vw > vh;
+
+  let availW, availH;
+  if (isLandscape) {
+    // Landscape: use full viewport, controls overlay on top
+    availW = vw;
+    availH = vh;
+  } else {
+    // Portrait: reserve space at the bottom for touch controls
+    availW = vw;
+    availH = vh - CTRL_HEIGHT;
+  }
+
+  // Scale to fit the 800x480 aspect ratio within available space
+  let scale = Math.min(availW / W, availH / H);
+  let drawW = Math.floor(W * scale);
+  let drawH = Math.floor(H * scale);
+
+  // Center the canvas
+  let offsetX = Math.floor((vw - drawW) / 2);
+  let offsetY = isLandscape ? Math.floor((vh - drawH) / 2) : 0;
+
+  // Size the container to fill viewport
+  container.style.width = vw + 'px';
+  container.style.height = vh + 'px';
+
+  // Position and size the canvas
+  canvas.style.position = 'absolute';
+  canvas.style.width = drawW + 'px';
+  canvas.style.height = drawH + 'px';
+  canvas.style.left = offsetX + 'px';
+  canvas.style.top = offsetY + 'px';
+}
+
+window.addEventListener('resize', resizeCanvas);
+window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 150));
+resizeCanvas();
 
 // Colors - Stardew Valley palette
 const C = {
