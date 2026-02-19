@@ -1,0 +1,8 @@
+services:
+  chickenland:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./leaderboard.json:/app/leaderboard.json
+    restart: unless-stopped

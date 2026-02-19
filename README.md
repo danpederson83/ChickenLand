@@ -4,7 +4,25 @@ A 2D platformer game built entirely in a single HTML file using HTML5 Canvas and
 
 ## How to Play
 
-Open `index.html` in any modern browser.
+### Run with Docker (recommended)
+
+```
+docker compose up -d
+```
+
+Then visit `http://localhost:3000`.
+
+### Run with Node.js
+
+```
+node server.js
+```
+
+Then visit `http://localhost:3000`.
+
+### Run without a server
+
+Open `index.html` directly in any modern browser. The game works fully offline, but the shared leaderboard requires the server.
 
 ### Controls
 
@@ -49,7 +67,10 @@ You're a chicken who escaped the pen. Navigate through 5 levels of obstacles to 
 - Screen shake, particle effects, and invincibility flash
 - Wolves with physics, wall collision, edge detection, and stuck-jump AI
 - Beat the game to unlock a cape for the chicken on replay
+- Speedrun timer and global top-5 leaderboard
 
 ## Tech
 
 Everything runs in a single `index.html` — vanilla JavaScript, Canvas 2D rendering, and Web Audio API oscillators/filters for all audio. Zero dependencies.
+
+The server (`server.js`) is a lightweight Node.js HTTP server with no npm dependencies. It serves the game and provides a REST API for the shared leaderboard, storing scores in `leaderboard.json`.

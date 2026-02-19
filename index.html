@@ -63,6 +63,49 @@
   }
   .btn:hover { background: #5aad4f; }
   .hidden { display: none !important; }
+  #leaderboard {
+    margin-top: 10px;
+    text-align: left;
+    width: 340px;
+  }
+  #leaderboard table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: monospace;
+    font-size: 14px;
+  }
+  #leaderboard th {
+    color: #f5c542;
+    text-align: left;
+    padding: 4px 8px;
+    border-bottom: 2px solid #5a3a1a;
+  }
+  #leaderboard td {
+    padding: 4px 8px;
+    color: #ccc;
+  }
+  #leaderboard tr.highlight td {
+    color: #f5c542;
+    font-weight: bold;
+  }
+  #nameEntry {
+    margin-top: 10px;
+    text-align: center;
+  }
+  #nameEntry input {
+    font-family: monospace;
+    font-size: 16px;
+    padding: 6px 12px;
+    width: 180px;
+    background: #2a2a2a;
+    color: #f5c542;
+    border: 2px solid #5a3a1a;
+    outline: none;
+    text-align: center;
+  }
+  #nameEntry input::placeholder { color: #666; }
+  #nameEntry .btn { padding: 6px 16px; font-size: 14px; margin-left: 6px; }
+  .time-display { color: #f5c542; font-size: 22px; margin-bottom: 6px; }
 </style>
 </head>
 <body>
@@ -83,8 +126,15 @@
 
   <div id="winScreen" class="hidden">
     <h1>You Made It Home!</h1>
-    <p>The chicken is safe in the pen.<br>Well done, brave chicken!</p>
-    <button class="btn" onclick="startGame()">Play Again</button>
+    <p>The chicken is safe in the pen!</p>
+    <div class="time-display" id="finalTime"></div>
+    <div id="nameEntry" class="hidden">
+      <p>Top 5 time! Enter your name:</p>
+      <input type="text" id="nameInput" maxlength="12" placeholder="Your name">
+      <button class="btn" onclick="submitScore()">Save</button>
+    </div>
+    <div id="leaderboard"></div>
+    <button class="btn" onclick="startGame()" style="margin-top:14px">Play Again</button>
   </div>
 
   <div id="deathScreen" class="hidden">
@@ -1126,6 +1176,9 @@ let levelTransition = 0;
 let levelTransitionDir = 0;
 let walkSoundTimer = 0;
 let hasBeatenGame = false;
+let gameTimer = 0; // frames elapsed
+let gameTimerRunning = false;
+let finalTimeMs = 0;
 
 // --- INPUT ---
 window.addEventListener('keydown', e => {
@@ -1135,6 +1188,16 @@ window.addEventListener('keydown', e => {
   }
 });
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && gameState === 'won') {
+    const input = document.getElementById('nameInput');
+    if (document.activeElement === input) {
+      submitScore();
+      e.preventDefault();
+    }
+  }
+});
 
 // --- INIT LEVEL ---
 function initLevel(levelIdx) {
@@ -1253,6 +1316,7 @@ function spawnParticles(x, y, color, count) {
 function update() {
   if (gameState !== 'playing') return;
   animFrame++;
+  if (gameTimerRunning) gameTimer++;
 
   // Level transition
   if (levelTransition > 0) {
@@ -1267,9 +1331,11 @@ function update() {
       } else {
         gameState = 'won';
         hasBeatenGame = true;
+        gameTimerRunning = false;
+        finalTimeMs = gameTimer * (1000 / 60);
         stopMusic();
         playSound('win');
-        document.getElementById('winScreen').classList.remove('hidden');
+        showWinScreen();
       }
     }
     return;
@@ -1567,6 +1633,7 @@ function hurtPlayer() {
 function playerDie() {
   player.dead = true;
   gameState = 'dead';
+  gameTimerRunning = false;
   spawnParticles(player.x + 12, player.y + 14, '#f5f0e0', 15);
   stopMusic();
   playSound('die');
@@ -1971,6 +2038,13 @@ function drawHUD() {
   const totalBugs = bugs.length;
   ctx.fillStyle = '#aaddff';
   ctx.fillText(`Bugs: ${totalBugs - aliveBugs}/${totalBugs}`, W - 120, 44);
+
+  // Timer
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(formatTime(gameTimer * (1000 / 60)), W / 2, 24);
+  ctx.textAlign = 'left';
 }
 
 function draw() {
@@ -2044,6 +2118,67 @@ function gameLoop() {
   requestAnimationFrame(gameLoop);
 }
 
+// --- TIMER & LEADERBOARD ---
+function formatTime(ms) {
+  const totalSec = ms / 1000;
+  const min = Math.floor(totalSec / 60);
+  const sec = Math.floor(totalSec % 60);
+  const frac = Math.floor((totalSec % 1) * 100);
+  return `${min}:${sec.toString().padStart(2, '0')}.${frac.toString().padStart(2, '0')}`;
+}
+
+async function fetchLeaderboard() {
+  try {
+    const res = await fetch('/api/leaderboard');
+    return await res.json();
+  } catch { return []; }
+}
+
+function renderLeaderboard(board) {
+  if (board.length === 0) {
+    document.getElementById('leaderboard').innerHTML = '';
+    return;
+  }
+  let html = '<h3>Best Times</h3><table><tr><th>#</th><th>Name</th><th>Time</th></tr>';
+  board.forEach((entry, i) => {
+    const hl = entry.time === finalTimeMs ? ' class="highlight"' : '';
+    html += `<tr${hl}><td>${i + 1}</td><td>${entry.name}</td><td>${formatTime(entry.time)}</td></tr>`;
+  });
+  html += '</table>';
+  document.getElementById('leaderboard').innerHTML = html;
+}
+
+async function showWinScreen() {
+  document.getElementById('winScreen').classList.remove('hidden');
+  document.getElementById('finalTime').textContent = formatTime(finalTimeMs);
+  const board = await fetchLeaderboard();
+  const isTop5 = board.length < 5 || finalTimeMs < board[board.length - 1].time;
+  if (isTop5) {
+    document.getElementById('nameEntry').classList.remove('hidden');
+    document.getElementById('nameInput').value = '';
+    setTimeout(() => document.getElementById('nameInput').focus(), 100);
+  } else {
+    document.getElementById('nameEntry').classList.add('hidden');
+  }
+  renderLeaderboard(board);
+}
+
+async function submitScore() {
+  const name = document.getElementById('nameInput').value.trim() || 'Chicken';
+  try {
+    const res = await fetch('/api/leaderboard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, time: finalTimeMs }),
+    });
+    const board = await res.json();
+    document.getElementById('nameEntry').classList.add('hidden');
+    renderLeaderboard(board);
+  } catch {
+    document.getElementById('nameEntry').classList.add('hidden');
+  }
+}
+
 function startGame() {
   document.getElementById('startScreen').classList.add('hidden');
   document.getElementById('winScreen').classList.add('hidden');
@@ -2051,6 +2186,8 @@ function startGame() {
   currentLevel = 0;
   initLevel(currentLevel);
   gameState = 'playing';
+  gameTimer = 0;
+  gameTimerRunning = true;
   levelTransition = 100;
   levelTransitionDir = -1;
   startMusic();
